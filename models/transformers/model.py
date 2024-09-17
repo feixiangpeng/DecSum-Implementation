@@ -9,6 +9,10 @@ import argparse
 import os
 from pathlib import Path
 from typing import Any, Dict
+import os
+import gzip
+import json
+import logging
 
 import torch
 import pytorch_lightning as pl
@@ -216,22 +220,44 @@ class Transformer_PL(pl.LightningModule):
         dataset_size = len(self.train_loader.dataset)
         return (dataset_size / effective_batch_size) * self.hparams.max_epochs
 
-    def setup(self, mode):
-        if mode == "fit":
+    def setup(self, stage: str = None):
+        if stage == 'fit' or stage is None:
             self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
 
+        # You can add more setup logic here if needed for validation or test stages
+        if stage == 'test' or stage is None:
+            # Setup for test if needed
+            pass
     def get_dataloader(self, type_path, batch_size, shuffle=False):
-        # todo add dataset path
-        data_filepath = os.path.join(self.hparams.data_dir, type_path+".jsonl.gz")
-        data = load_jsonl_gz(data_filepath)
-        yelp = TransformerYelpDataset(self.tokenizer,data,self.hparams.max_seq_length)
-        logger.info(f"Loading {type_path} dataset with length {len(yelp)} from {data_filepath}")
-        data_loader = torch.utils.data.DataLoader(dataset=yelp,
-                                                batch_size=batch_size,
-                                                shuffle=shuffle,
-                                                num_workers=self.hparams.num_workers,
-                                                collate_fn=yelp.collate_fn)
-        
+        data_filepath = os.path.join(self.hparams.data_dir, f"{type_path}.jsonl.gz")
+        logging.info(f"Attempting to load data from: {data_filepath}")
+
+        if not os.path.exists(data_filepath):
+            raise FileNotFoundError(f"Data file not found: {data_filepath}")
+
+        try:
+            with gzip.open(data_filepath, 'rt') as f:
+                data = [json.loads(line) for line in f]
+        except Exception as e:
+            logging.error(f"Error reading data file: {e}")
+            raise
+
+        logging.info(f"Loaded {len(data)} samples from {data_filepath}")
+
+        if len(data) == 0:
+            raise ValueError(f"No data found in {data_filepath}")
+
+        yelp = TransformerYelpDataset(self.tokenizer, data, self.hparams.max_seq_length)
+        logging.info(f"Created dataset with length {len(yelp)}")
+
+        data_loader = torch.utils.data.DataLoader(
+            dataset=yelp,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=self.hparams.num_workers,
+            collate_fn=yelp.collate_fn
+        )
+
         return data_loader
 
     def train_dataloader(self):
